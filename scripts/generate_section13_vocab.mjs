@@ -102,7 +102,7 @@ function normalizePdfText(text) {
 
 function extractWords(text) {
   const tokens = text.toLowerCase().replace(/[’']/g, "'").match(/[a-z]+(?:'[a-z]+)?(?:-[a-z]+)*/g) || []
-  return [...new Set(tokens)].filter((word) => word.length > 2 && !STOP_WORDS.has(word)).sort()
+  return [...new Set(tokens)].filter((word) => word.length > 2 && !STOP_WORDS.has(word))
 }
 
 function isMeaningPending(meaning) {
@@ -170,12 +170,7 @@ async function buildVocabulary(words, existingCache) {
     const resolved = await Promise.all(
       chunk.map(async (word) => {
         const cached = existingCache.get(word)
-        const canReuse =
-          cached &&
-          !isMeaningPending(cached.meaning) &&
-          !isPhoneticPending(cached.phonetic)
-
-        if (canReuse) {
+        if (cached) {
           return {
             word,
             phonetic: cached.phonetic,
