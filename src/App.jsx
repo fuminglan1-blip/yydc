@@ -5,6 +5,7 @@ import PageHeader from './components/PageHeader'
 import SearchBar from './components/SearchBar'
 import WordTable from './components/WordTable'
 import { MOCK_DICTIONARY } from './data/mockDictionary'
+import { SECTION_1_3_VOCABULARY } from './data/section13Vocabulary'
 import { lookupWordDetails } from './utils/dictionaryLookup'
 import { parseCsvFirstColumn, parseManualWords, parseTxtWords } from './utils/wordParser'
 
@@ -109,6 +110,48 @@ function readCachedWords() {
   }
 }
 
+function buildPresetVocabularyRecords() {
+  const uniqueMap = new Map()
+
+  SECTION_1_3_VOCABULARY.forEach((item) => {
+    if (!item || typeof item.word !== 'string') {
+      return
+    }
+
+    const record = buildWordRecord(item.word)
+    if (!record) {
+      return
+    }
+
+    uniqueMap.set(record.id, {
+      ...record,
+      phonetic: isPhoneticPending(item.phonetic) ? record.phonetic : item.phonetic,
+      meaning: isMeaningPending(item.meaning) ? record.meaning : item.meaning,
+    })
+  })
+
+  return Array.from(uniqueMap.values())
+}
+
+function mergeWordLists(primaryWords, secondaryWords) {
+  const map = new Map()
+
+  primaryWords.forEach((item) => map.set(item.id, item))
+  secondaryWords.forEach((item) => {
+    if (!map.has(item.id)) {
+      map.set(item.id, item)
+    }
+  })
+
+  return Array.from(map.values())
+}
+
+function initializeWords() {
+  const cachedWords = readCachedWords()
+  const presetWords = buildPresetVocabularyRecords()
+  return mergeWordLists(cachedWords, presetWords)
+}
+
 function mergeWords(existingWords, rawWords) {
   const existingIds = new Set(existingWords.map((item) => item.id))
   const nextWords = [...existingWords]
@@ -139,7 +182,7 @@ function mergeWords(existingWords, rawWords) {
 }
 
 function App() {
-  const [words, setWords] = useState(() => readCachedWords())
+  const [words, setWords] = useState(() => initializeWords())
   const wordsRef = useRef(words)
   const lookupInFlightRef = useRef(false)
   const [manualInput, setManualInput] = useState('')
