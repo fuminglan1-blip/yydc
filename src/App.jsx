@@ -9,7 +9,11 @@ import { SECTION_1_3_VOCABULARY } from './data/section13Vocabulary'
 import { lookupWordDetails } from './utils/dictionaryLookup'
 import { parseCsvFirstColumn, parseManualWords, parseTxtWords } from './utils/wordParser'
 
-const STORAGE_KEY = 'word-study-tool-words-v2-fullbook-from-1-3'
+const STORAGE_KEY = 'word-study-tool-words-v3-fullbook-source-order'
+const LEGACY_STORAGE_KEYS = [
+  'word-study-tool-words-v1',
+  'word-study-tool-words-v2-fullbook-from-1-3',
+]
 const PLACEHOLDER_MEANING = '待补充'
 
 function normalizeWord(value) {
@@ -188,6 +192,10 @@ function App() {
       'speechSynthesis' in window &&
       'SpeechSynthesisUtterance' in window
     setSpeechSupported(supported)
+  }, [])
+
+  useEffect(() => {
+    LEGACY_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key))
   }, [])
 
   useEffect(() => {
