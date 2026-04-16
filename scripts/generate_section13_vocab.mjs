@@ -1,14 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { PDFParse } from 'pdf-parse'
 import { lookupWordDetails } from '../src/utils/dictionaryLookup.js'
 
 const PDF_PATH =
   'd:\\WXLT\\xwechat_files\\wxid_de62rvue2eth22_be30\\msg\\file\\2026-04\\Emerging-Actuator-Technologies-A-Micromechatronic-Approach_ISBN0470091975(1).pdf'
 const START_PAGE = 34
-const END_PAGE = 68
 const OUTPUT_PATH = path.resolve('src/data/section13Vocabulary.js')
-const BATCH_SIZE = 6
+const BATCH_SIZE = 8
 
 const STOP_WORDS = new Set([
   'a',
@@ -105,6 +105,49 @@ function extractWords(text) {
   return [...new Set(tokens)].filter((word) => word.length > 2 && !STOP_WORDS.has(word)).sort()
 }
 
+function isMeaningPending(meaning) {
+  if (typeof meaning !== 'string') {
+    return true
+  }
+
+  const normalized = meaning.trim()
+  return normalized === '' || normalized === '-' || normalized === '待补充'
+}
+
+function isPhoneticPending(phonetic) {
+  if (typeof phonetic !== 'string') {
+    return true
+  }
+
+  const normalized = phonetic.trim()
+  return normalized === '' || normalized === '-'
+}
+
+async function readExistingCache() {
+  if (!fs.existsSync(OUTPUT_PATH)) {
+    return new Map()
+  }
+
+  try {
+    const imported = await import(`${pathToFileURL(OUTPUT_PATH).href}?ts=${Date.now()}`)
+    const list = imported?.SECTION_1_3_VOCABULARY
+    if (!Array.isArray(list)) {
+      return new Map()
+    }
+
+    const map = new Map()
+    list.forEach((item) => {
+      if (item && typeof item.word === 'string') {
+        map.set(item.word, item)
+      }
+    })
+    return map
+  } catch (error) {
+    console.warn('failed to load existing cache, will rebuild all words')
+    return new Map()
+  }
+}
+
 async function retryLookup(word, retries = 2) {
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
@@ -119,13 +162,27 @@ async function retryLookup(word, retries = 2) {
   return { phonetic: '-', meaning: '待补充' }
 }
 
-async function buildVocabulary(words) {
+async function buildVocabulary(words, existingCache) {
   const results = []
 
   for (let index = 0; index < words.length; index += BATCH_SIZE) {
     const chunk = words.slice(index, index + BATCH_SIZE)
     const resolved = await Promise.all(
       chunk.map(async (word) => {
+        const cached = existingCache.get(word)
+        const canReuse =
+          cached &&
+          !isMeaningPending(cached.meaning) &&
+          !isPhoneticPending(cached.phonetic)
+
+        if (canReuse) {
+          return {
+            word,
+            phonetic: cached.phonetic,
+            meaning: cached.meaning,
+          }
+        }
+
         const details = await retryLookup(word)
         return {
           word,
@@ -153,16 +210,21 @@ async function main() {
   }
 
   const parser = new PDFParse({ data: fs.readFileSync(PDF_PATH) })
+  const info = await parser.getInfo()
+  const endPage = info.total
   let fullText = ''
-  for (let page = START_PAGE; page <= END_PAGE; page += 1) {
+  for (let page = START_PAGE; page <= endPage; page += 1) {
     const pageText = await parser.getText({ partial: [page] })
     fullText += `\n${pageText.text}`
   }
   await parser.destroy()
 
   const words = extractWords(normalizePdfText(fullText))
+  const existingCache = await readExistingCache()
+  console.log(`page range: ${START_PAGE}-${endPage}`)
   console.log(`unique candidate words: ${words.length}`)
-  const vocabulary = await buildVocabulary(words)
+  console.log(`existing cache words: ${existingCache.size}`)
+  const vocabulary = await buildVocabulary(words, existingCache)
   fs.writeFileSync(OUTPUT_PATH, toModuleSource(vocabulary), 'utf8')
   console.log(`saved: ${OUTPUT_PATH}`)
 }

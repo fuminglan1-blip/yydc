@@ -9,7 +9,7 @@ import { SECTION_1_3_VOCABULARY } from './data/section13Vocabulary'
 import { lookupWordDetails } from './utils/dictionaryLookup'
 import { parseCsvFirstColumn, parseManualWords, parseTxtWords } from './utils/wordParser'
 
-const STORAGE_KEY = 'word-study-tool-words-v1'
+const STORAGE_KEY = 'word-study-tool-words-v2-fullbook-from-1-3'
 const PLACEHOLDER_MEANING = '待补充'
 
 function normalizeWord(value) {
@@ -75,7 +75,7 @@ function readCachedWords() {
     const raw = localStorage.getItem(STORAGE_KEY)
 
     if (!raw) {
-      return []
+      return null
     }
 
     const parsed = JSON.parse(raw)
@@ -133,23 +133,13 @@ function buildPresetVocabularyRecords() {
   return Array.from(uniqueMap.values())
 }
 
-function mergeWordLists(primaryWords, secondaryWords) {
-  const map = new Map()
-
-  primaryWords.forEach((item) => map.set(item.id, item))
-  secondaryWords.forEach((item) => {
-    if (!map.has(item.id)) {
-      map.set(item.id, item)
-    }
-  })
-
-  return Array.from(map.values())
-}
-
 function initializeWords() {
   const cachedWords = readCachedWords()
-  const presetWords = buildPresetVocabularyRecords()
-  return mergeWordLists(cachedWords, presetWords)
+  if (cachedWords !== null) {
+    return cachedWords
+  }
+
+  return buildPresetVocabularyRecords()
 }
 
 function mergeWords(existingWords, rawWords) {
