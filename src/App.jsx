@@ -1,190 +1,84 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import EmptyState from './components/EmptyState'
-import ImportPanel from './components/ImportPanel'
-import PageHeader from './components/PageHeader'
-import SearchBar from './components/SearchBar'
-import WordTable from './components/WordTable'
-import { MOCK_DICTIONARY } from './data/mockDictionary'
-import { SECTION_1_3_VOCABULARY } from './data/section13Vocabulary'
-import { lookupWordDetails } from './utils/dictionaryLookup'
-import { parseCsvFirstColumn, parseManualWords, parseTxtWords } from './utils/wordParser'
+import { useEffect, useMemo, useState } from 'react'
+import { READING_CONTENT } from './data/readingPassages'
+import { lookupWordDetails, translateEnglishTextToChinese } from './utils/dictionaryLookup'
 
-const STORAGE_KEY = 'word-study-tool-words-v3-fullbook-source-order'
-const LEGACY_STORAGE_KEYS = [
-  'word-study-tool-words-v1',
-  'word-study-tool-words-v2-fullbook-from-1-3',
-]
-const PLACEHOLDER_MEANING = '待补充'
+const WORD_CACHE_KEY = 'reading-practice-word-cache-v1'
+const BLOCK_TRANSLATION_CACHE_KEY = 'reading-practice-block-translation-v1'
 
-function normalizeWord(value) {
-  return value.trim().toLowerCase()
+function normalizeWord(word) {
+  return word.toLowerCase()
 }
 
-function isMeaningPending(meaning) {
-  if (typeof meaning !== 'string') {
-    return true
-  }
-
-  const normalized = meaning.trim()
-  return normalized === '' || normalized === '-' || normalized === PLACEHOLDER_MEANING
+function tokenizeText(text) {
+  return text.match(/[A-Za-z]+(?:[-'][A-Za-z]+)?|[^A-Za-z]+/g) || []
 }
 
-function isPhoneticPending(phonetic) {
-  if (typeof phonetic !== 'string') {
-    return true
+function splitSpeakChunks(text) {
+  const sentences = text.split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean)
+  if (sentences.length === 0) {
+    return [text]
   }
 
-  const normalized = phonetic.trim()
-  return normalized === '' || normalized === '-'
+  const chunks = []
+  let current = ''
+
+  sentences.forEach((sentence) => {
+    if (!current) {
+      current = sentence
+      return
+    }
+
+    const next = `${current} ${sentence}`
+    if (next.length > 240) {
+      chunks.push(current)
+      current = sentence
+      return
+    }
+
+    current = next
+  })
+
+  if (current) {
+    chunks.push(current)
+  }
+
+  return chunks
 }
 
-function parseRawEntry(rawWord) {
-  const text = String(rawWord ?? '').trim()
-  if (!text) {
-    return { word: '', meaningHint: '' }
-  }
-
-  const chineseMatch = text.match(/[\u4e00-\u9fff].*$/)
-  const meaningHint = chineseMatch ? chineseMatch[0].trim() : ''
-
-  let englishPart = chineseMatch ? text.slice(0, chineseMatch.index).trim() : text
-  englishPart = englishPart
-    .replace(/[\|/,:;]+$/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-
-  return { word: englishPart, meaningHint }
-}
-
-function buildWordRecord(rawWord) {
-  const { word, meaningHint } = parseRawEntry(rawWord)
-  const normalized = normalizeWord(word)
-
-  if (!normalized) {
-    return null
-  }
-
-  const dictionaryInfo = MOCK_DICTIONARY[normalized]
-
-  return {
-    id: normalized,
-    word: normalized,
-    phonetic: dictionaryInfo?.phonetic ?? '-',
-    meaning: dictionaryInfo?.meaning ?? (meaningHint || PLACEHOLDER_MEANING),
-  }
-}
-
-function readCachedWords() {
+function readObjectCache(key) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-
+    const raw = localStorage.getItem(key)
     if (!raw) {
-      return null
+      return {}
     }
-
     const parsed = JSON.parse(raw)
-
-    if (!Array.isArray(parsed)) {
-      return []
+    if (!parsed || typeof parsed !== 'object') {
+      return {}
     }
-
-    const uniqueMap = new Map()
-    parsed.forEach((item) => {
-      if (!item || typeof item.word !== 'string') {
-        return
-      }
-
-      const record = buildWordRecord(item.word)
-      if (record) {
-        const cachedPhonetic = typeof item.phonetic === 'string' ? item.phonetic : ''
-        const cachedMeaning = typeof item.meaning === 'string' ? item.meaning : ''
-
-        uniqueMap.set(record.id, {
-          ...record,
-          phonetic: isPhoneticPending(cachedPhonetic) ? record.phonetic : cachedPhonetic,
-          meaning: isMeaningPending(cachedMeaning) ? record.meaning : cachedMeaning,
-        })
-      }
-    })
-
-    return Array.from(uniqueMap.values())
-  } catch (error) {
-    console.error('读取本地缓存失败:', error)
-    return []
+    return parsed
+  } catch {
+    return {}
   }
 }
 
-function buildPresetVocabularyRecords() {
-  const uniqueMap = new Map()
-
-  SECTION_1_3_VOCABULARY.forEach((item) => {
-    if (!item || typeof item.word !== 'string') {
-      return
-    }
-
-    const record = buildWordRecord(item.word)
-    if (!record) {
-      return
-    }
-
-    uniqueMap.set(record.id, {
-      ...record,
-      phonetic: isPhoneticPending(item.phonetic) ? record.phonetic : item.phonetic,
-      meaning: isMeaningPending(item.meaning) ? record.meaning : item.meaning,
-    })
-  })
-
-  return Array.from(uniqueMap.values())
-}
-
-function initializeWords() {
-  const cachedWords = readCachedWords()
-  if (cachedWords !== null) {
-    return cachedWords
-  }
-
-  return buildPresetVocabularyRecords()
-}
-
-function mergeWords(existingWords, rawWords) {
-  const existingIds = new Set(existingWords.map((item) => item.id))
-  const nextWords = [...existingWords]
-  const pendingLookupIds = []
-  let addedCount = 0
-  let duplicateCount = 0
-
-  rawWords.forEach((rawWord) => {
-    const record = buildWordRecord(rawWord)
-    if (!record) {
-      return
-    }
-
-    if (existingIds.has(record.id)) {
-      duplicateCount += 1
-      return
-    }
-
-    existingIds.add(record.id)
-    nextWords.push(record)
-    if (record.phonetic === '-' || isMeaningPending(record.meaning)) {
-      pendingLookupIds.push(record.id)
-    }
-    addedCount += 1
-  })
-
-  return { nextWords, addedCount, duplicateCount, pendingLookupIds }
+function getBlockKey(sectionId, blockId) {
+  return `${sectionId}::${blockId}`
 }
 
 function App() {
-  const [words, setWords] = useState(() => initializeWords())
-  const wordsRef = useRef(words)
-  const lookupInFlightRef = useRef(false)
-  const [manualInput, setManualInput] = useState('')
-  const [searchText, setSearchText] = useState('')
+  const [sectionIndex, setSectionIndex] = useState(0)
+  const [wordCache, setWordCache] = useState(() => readObjectCache(WORD_CACHE_KEY))
+  const [blockTranslationCache, setBlockTranslationCache] = useState(() =>
+    readObjectCache(BLOCK_TRANSLATION_CACHE_KEY),
+  )
+  const [selectedWord, setSelectedWord] = useState('')
+  const [wordDetailLoading, setWordDetailLoading] = useState(false)
   const [speechSupported, setSpeechSupported] = useState(false)
-  const [feedback, setFeedback] = useState('')
-  const [lookupMessage, setLookupMessage] = useState('')
-  const [isLookuping, setIsLookuping] = useState(false)
+  const [speakingKey, setSpeakingKey] = useState('')
+  const [notice, setNotice] = useState('')
+  const [translatingBlocks, setTranslatingBlocks] = useState({})
+
+  const currentSection = READING_CONTENT.sections[sectionIndex]
 
   useEffect(() => {
     const supported =
@@ -195,254 +89,343 @@ function App() {
   }, [])
 
   useEffect(() => {
-    LEGACY_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key))
+    localStorage.setItem(WORD_CACHE_KEY, JSON.stringify(wordCache))
+  }, [wordCache])
+
+  useEffect(() => {
+    localStorage.setItem(BLOCK_TRANSLATION_CACHE_KEY, JSON.stringify(blockTranslationCache))
+  }, [blockTranslationCache])
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel()
+      }
+    }
   }, [])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(words))
-  }, [words])
+    let cancelled = false
 
-  useEffect(() => {
-    wordsRef.current = words
-  }, [words])
-
-  const filteredWords = useMemo(() => {
-    const keyword = searchText.trim().toLowerCase()
-
-    if (!keyword) {
-      return words
-    }
-
-    return words.filter((item) => {
-      return (
-        item.word.includes(keyword) ||
-        item.phonetic.toLowerCase().includes(keyword) ||
-        item.meaning.toLowerCase().includes(keyword)
-      )
-    })
-  }, [searchText, words])
-
-  const pendingMeaningCount = useMemo(() => {
-    return words.filter((item) => isMeaningPending(item.meaning)).length
-  }, [words])
-
-  const enrichWordsFromApi = async (wordIds) => {
-    const uniqueIds = Array.from(new Set(wordIds))
-    if (uniqueIds.length === 0) {
-      return
-    }
-
-    if (lookupInFlightRef.current) {
-      setLookupMessage('正在识别中，请稍候...')
-      return
-    }
-
-    lookupInFlightRef.current = true
-    setIsLookuping(true)
-    setLookupMessage(`正在自动识别 ${uniqueIds.length} 个新单词的音标与中文意思...`)
-
-    try {
-      const updates = new Map()
-      const chunkSize = 4
-
-      for (let index = 0; index < uniqueIds.length; index += chunkSize) {
-        const chunk = uniqueIds.slice(index, index + chunkSize)
-        const chunkResults = await Promise.all(
-          chunk.map(async (wordId) => {
-            try {
-              const details = await lookupWordDetails(wordId)
-              return { wordId, ...details }
-            } catch (error) {
-              console.error(`自动识别失败: ${wordId}`, error)
-              return { wordId, phonetic: '-', meaning: '待补充' }
-            }
-          }),
-        )
-
-        chunkResults.forEach((result) => {
-          updates.set(result.wordId, result)
-        })
+    const run = async () => {
+      if (!currentSection) {
+        return
       }
 
-      let updatedCount = 0
-      const nextWords = wordsRef.current.map((item) => {
-        const update = updates.get(item.id)
-        if (!update) {
-          return item
+      const targets = currentSection.blocks
+        .map((block, index) => ({ block, index }))
+        .filter(({ block, index }) => {
+          if (index % 2 !== 0) {
+            return false
+          }
+          if (block.zh) {
+            return false
+          }
+          const key = getBlockKey(currentSection.id, block.id)
+          return !blockTranslationCache[key]
+        })
+        .slice(0, 12)
+
+      for (const { block } of targets) {
+        if (cancelled) {
+          return
         }
 
-        const nextPhonetic = item.phonetic === '-' ? update.phonetic : item.phonetic
-        const nextMeaning = isMeaningPending(item.meaning) ? update.meaning : item.meaning
+        const key = getBlockKey(currentSection.id, block.id)
+        setTranslatingBlocks((prev) => ({ ...prev, [key]: true }))
 
-        if (nextPhonetic !== item.phonetic || nextMeaning !== item.meaning) {
-          updatedCount += 1
+        try {
+          const translated = await translateEnglishTextToChinese(block.en)
+          if (!cancelled && translated) {
+            setBlockTranslationCache((prev) => ({ ...prev, [key]: translated }))
+          }
+        } catch {
+          if (!cancelled) {
+            setNotice('部分段落翻译加载失败，可稍后重试。')
+          }
+        } finally {
+          if (!cancelled) {
+            setTranslatingBlocks((prev) => ({ ...prev, [key]: false }))
+          }
         }
+      }
+    }
 
-        return {
-          ...item,
-          phonetic: nextPhonetic,
-          meaning: nextMeaning,
-        }
-      })
+    void run()
 
-      wordsRef.current = nextWords
-      setWords(nextWords)
+    return () => {
+      cancelled = true
+    }
+  }, [blockTranslationCache, currentSection])
 
-      if (updatedCount > 0) {
-        setLookupMessage(`自动识别完成：已补全 ${updatedCount} 个单词。`)
-      } else {
-        setLookupMessage('自动识别完成：暂未查询到可补全结果。')
+  const selectedWordDetail = useMemo(() => {
+    if (!selectedWord) {
+      return null
+    }
+
+    return wordCache[selectedWord] || null
+  }, [selectedWord, wordCache])
+
+  const sectionTextForReading = useMemo(() => {
+    if (!currentSection) {
+      return ''
+    }
+    return currentSection.blocks.map((block) => block.en).join(' ')
+  }, [currentSection])
+
+  const playText = (text, key) => {
+    if (!speechSupported) {
+      setNotice('当前浏览器不支持朗读，请使用最新版 Chrome / Edge / Safari。')
+      return
+    }
+
+    if (!text.trim()) {
+      return
+    }
+
+    const synth = window.speechSynthesis
+    synth.cancel()
+
+    const chunks = splitSpeakChunks(text)
+    const utterances = chunks.map((chunk) => {
+      const utterance = new SpeechSynthesisUtterance(chunk)
+      utterance.lang = 'en-US'
+      utterance.rate = 0.92
+      utterance.pitch = 1
+      return utterance
+    })
+
+    setSpeakingKey(key)
+
+    utterances.forEach((utterance, index) => {
+      if (index === utterances.length - 1) {
+        utterance.onend = () => setSpeakingKey('')
+        utterance.onerror = () => setSpeakingKey('')
+      }
+      synth.speak(utterance)
+    })
+  }
+
+  const handleStopSpeaking = () => {
+    if (!speechSupported) {
+      return
+    }
+    window.speechSynthesis.cancel()
+    setSpeakingKey('')
+  }
+
+  const handleWordClick = async (word) => {
+    const normalized = normalizeWord(word)
+    setSelectedWord(normalized)
+
+    if (wordCache[normalized]) {
+      return
+    }
+
+    setWordDetailLoading(true)
+    try {
+      const detail = await lookupWordDetails(normalized)
+      setWordCache((prev) => ({
+        ...prev,
+        [normalized]: {
+          phonetic: detail?.phonetic || '-',
+          meaning: detail?.meaning || '待补充',
+        },
+      }))
+    } catch {
+      setNotice(`查询单词失败：${normalized}`)
+      setWordCache((prev) => ({
+        ...prev,
+        [normalized]: {
+          phonetic: '-',
+          meaning: '待补充',
+        },
+      }))
+    } finally {
+      setWordDetailLoading(false)
+    }
+  }
+
+  const handleTranslateOneBlock = async (block) => {
+    if (!currentSection) {
+      return
+    }
+
+    const key = getBlockKey(currentSection.id, block.id)
+    if (blockTranslationCache[key]) {
+      return
+    }
+
+    setTranslatingBlocks((prev) => ({ ...prev, [key]: true }))
+    try {
+      const translated = await translateEnglishTextToChinese(block.en)
+      if (translated) {
+        setBlockTranslationCache((prev) => ({ ...prev, [key]: translated }))
       }
     } finally {
-      lookupInFlightRef.current = false
-      setIsLookuping(false)
+      setTranslatingBlocks((prev) => ({ ...prev, [key]: false }))
     }
   }
 
-  const addWords = (rawWords, sourceLabel) => {
-    const { nextWords, addedCount, duplicateCount, pendingLookupIds } = mergeWords(
-      wordsRef.current,
-      rawWords,
-    )
-
-    if (addedCount > 0) {
-      wordsRef.current = nextWords
-      setWords(nextWords)
-    }
-
-    if (addedCount === 0) {
-      setFeedback(`${sourceLabel}未添加新单词，可能都已存在或为空。`)
+  const playWord = () => {
+    if (!selectedWord) {
       return
     }
-
-    const duplicateInfo = duplicateCount > 0 ? `，跳过 ${duplicateCount} 个重复词` : ''
-    setFeedback(`${sourceLabel}新增 ${addedCount} 个单词${duplicateInfo}。`)
-
-    if (pendingLookupIds.length > 0) {
-      void enrichWordsFromApi(pendingLookupIds)
-    } else {
-      setLookupMessage('新单词已全部命中本地词典，无需联网补全。')
-    }
+    playText(selectedWord, `word-${selectedWord}`)
   }
 
-  const handleManualAdd = () => {
-    const parsedWords = parseManualWords(manualInput)
-    addWords(parsedWords, '手动输入')
-    setManualInput('')
-  }
-
-  const handleFileImport = async (file) => {
-    const text = await file.text()
-    const lowerName = file.name.toLowerCase()
-
-    const parsedWords = lowerName.endsWith('.csv')
-      ? parseCsvFirstColumn(text)
-      : parseTxtWords(text)
-
-    addWords(parsedWords, `文件 ${file.name}`)
-  }
-
-  const handleSpeak = (word) => {
-    if (!speechSupported) {
-      setFeedback('当前浏览器不支持发音播放，请使用最新版 Chrome/Edge/Safari。')
-      return
-    }
-
-    const utterance = new SpeechSynthesisUtterance(word)
-    utterance.lang = 'en-US'
-    utterance.rate = 0.95
-
-    window.speechSynthesis.cancel()
-    window.speechSynthesis.speak(utterance)
-  }
-
-  const handleDelete = (id) => {
-    const nextWords = wordsRef.current.filter((item) => item.id !== id)
-    wordsRef.current = nextWords
-    setWords(nextWords)
-  }
-
-  const handleClearAll = () => {
-    wordsRef.current = []
-    setWords([])
-    setFeedback('已清空全部单词。')
-  }
-
-  const handleDedupe = () => {
-    const uniqueMap = new Map()
-    wordsRef.current.forEach((item) => {
-      if (!uniqueMap.has(item.id)) {
-        uniqueMap.set(item.id, item)
-      }
-    })
-    const dedupedWords = Array.from(uniqueMap.values())
-    const removedCount = wordsRef.current.length - dedupedWords.length
-
-    if (removedCount === 0) {
-      setFeedback('当前列表无需去重。')
-      return
-    }
-
-    wordsRef.current = dedupedWords
-    setWords(dedupedWords)
-    setFeedback(`去重完成，已移除 ${removedCount} 个重复项。`)
-  }
-
-  const handleRecognizeMeanings = () => {
-    const targets = wordsRef.current
-      .filter((item) => isMeaningPending(item.meaning) || item.phonetic === '-')
-      .map((item) => item.id)
-
-    if (targets.length === 0) {
-      setLookupMessage('当前单词都已有中文意思，无需识别。')
-      return
-    }
-
-    void enrichWordsFromApi(targets)
+  if (!currentSection) {
+    return <main className="reader-shell">暂无可用课文内容。</main>
   }
 
   return (
-    <main className="app-shell">
-      <PageHeader totalCount={words.length} />
-
-      <ImportPanel
-        manualInput={manualInput}
-        onManualInputChange={setManualInput}
-        onManualAdd={handleManualAdd}
-        onFileImport={handleFileImport}
-      />
-
-      <SearchBar
-        searchText={searchText}
-        onSearchChange={setSearchText}
-        totalCount={words.length}
-        filteredCount={filteredWords.length}
-        onDedupe={handleDedupe}
-        onClearAll={handleClearAll}
-        pendingMeaningCount={pendingMeaningCount}
-        onRecognizeMeanings={handleRecognizeMeanings}
-        isLookuping={isLookuping}
-      />
-
-      {!speechSupported && (
-        <p className="notice warning">
-          当前浏览器不支持 Web Speech API，发音功能不可用。建议使用最新版 Chrome / Edge / Safari。
+    <main className="reader-shell">
+      <header className="book-header">
+        <h1>英语课文朗读练习</h1>
+        <p>
+          内容来源：{READING_CONTENT.source}（页码 {READING_CONTENT.pageRange}）
         </p>
-      )}
+      </header>
 
-      {feedback && <p className="notice info">{feedback}</p>}
-      {lookupMessage && <p className="notice info">{lookupMessage}</p>}
+      <section className="control-panel">
+        <label className="field">
+          <span>选择章节</span>
+          <select
+            value={sectionIndex}
+            onChange={(event) => {
+              setSectionIndex(Number(event.target.value))
+              setNotice('')
+            }}
+          >
+            {READING_CONTENT.sections.map((section, index) => (
+              <option key={section.id} value={index}>
+                {index + 1}. {section.title}
+              </option>
+            ))}
+          </select>
+        </label>
 
-      {filteredWords.length > 0 ? (
-        <WordTable
-          words={filteredWords}
-          onSpeak={handleSpeak}
-          onDelete={handleDelete}
-          speechSupported={speechSupported}
-        />
-      ) : (
-        <EmptyState hasWords={words.length > 0} />
-      )}
+        <div className="button-row">
+          <button
+            className="btn primary"
+            type="button"
+            onClick={() => playText(sectionTextForReading, `section-${currentSection.id}`)}
+          >
+            朗读本节全文
+          </button>
+          <button className="btn secondary" type="button" onClick={handleStopSpeaking}>
+            停止朗读
+          </button>
+        </div>
+
+        {notice && <p className="notice">{notice}</p>}
+      </section>
+
+      <section className="book-page">
+        <h2>{currentSection.title}</h2>
+
+        <div className="page-grid">
+          <article className="text-column">
+            {currentSection.blocks.map((block, index) => {
+              const tokens = tokenizeText(block.en)
+              const blockKey = getBlockKey(currentSection.id, block.id)
+              const translatedText = block.zh || blockTranslationCache[blockKey] || ''
+              const shouldShowTranslation = index % 2 === 0
+              const isTranslating = Boolean(translatingBlocks[blockKey])
+
+              return (
+                <section key={block.id} className="paragraph-card">
+                  <div className="paragraph-toolbar">
+                    <span>段落 {index + 1}</span>
+                    <button
+                      className="btn tiny"
+                      type="button"
+                      onClick={() => playText(block.en, `block-${block.id}`)}
+                    >
+                      {speakingKey === `block-${block.id}` ? '朗读中...' : '朗读本段'}
+                    </button>
+                  </div>
+
+                  <p className="english-paragraph">
+                    {tokens.map((token, tokenIndex) => {
+                      if (/^[A-Za-z]+(?:[-'][A-Za-z]+)?$/.test(token)) {
+                        const normalized = normalizeWord(token)
+                        const isActive = selectedWord === normalized
+                        return (
+                          <button
+                            key={`${block.id}-${tokenIndex}`}
+                            className={`word-chip ${isActive ? 'active' : ''}`}
+                            type="button"
+                            onClick={() => handleWordClick(token)}
+                          >
+                            {token}
+                          </button>
+                        )
+                      }
+
+                      return (
+                        <span key={`${block.id}-${tokenIndex}`} className="plain-token">
+                          {token}
+                        </span>
+                      )
+                    })}
+                  </p>
+
+                  {shouldShowTranslation && (
+                    <div className="translation-box">
+                      <h3>中文对照</h3>
+                      {translatedText ? (
+                        <p>{translatedText}</p>
+                      ) : (
+                        <div className="translation-placeholder">
+                          <p>{isTranslating ? '翻译生成中...' : '该段中文正在准备中。'}</p>
+                          {!isTranslating && (
+                            <button
+                              className="btn tiny"
+                              type="button"
+                              onClick={() => handleTranslateOneBlock(block)}
+                            >
+                              立即生成翻译
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </section>
+              )
+            })}
+          </article>
+
+          <aside className="word-panel">
+            <h3>单词信息</h3>
+            {!selectedWord && <p>点击左侧英文单词，即可查看发音和意思。</p>}
+
+            {selectedWord && (
+              <div className="word-detail">
+                <p className="word-title">{selectedWord}</p>
+                {wordDetailLoading && <p>正在查询...</p>}
+
+                {!wordDetailLoading && (
+                  <>
+                    <p>
+                      <strong>音标：</strong>
+                      {selectedWordDetail?.phonetic || '-'}
+                    </p>
+                    <p>
+                      <strong>中文：</strong>
+                      {selectedWordDetail?.meaning || '待补充'}
+                    </p>
+                    <button className="btn tiny" type="button" onClick={playWord}>
+                      播放单词发音
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </aside>
+        </div>
+      </section>
     </main>
   )
 }

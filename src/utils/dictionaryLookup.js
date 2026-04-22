@@ -84,6 +84,11 @@ async function translateToChinese(text) {
   return cleanMeaningText(data?.responseData?.translatedText)
 }
 
+export async function translateEnglishTextToChinese(text) {
+  const translated = await translateToChinese(text)
+  return translated || ''
+}
+
 export async function lookupWordDetails(word) {
   const [entryResult, directMeaningResult] = await Promise.allSettled([
     fetchDictionaryEntry(word),
