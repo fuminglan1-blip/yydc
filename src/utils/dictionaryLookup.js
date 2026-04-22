@@ -84,14 +84,39 @@ async function translateToChinese(text) {
   return cleanMeaningText(data?.responseData?.translatedText)
 }
 
+async function translateViaSiteApi(text) {
+  try {
+    const params = new URLSearchParams({ text })
+    const response = await fetch(`/api/translate?${params.toString()}`)
+    if (!response.ok) {
+      return ''
+    }
+
+    const data = await response.json()
+    return cleanMeaningText(data?.translatedText || '')
+  } catch {
+    return ''
+  }
+}
+
 export async function translateEnglishTextToChinese(text) {
   const source = cleanMeaningText(text)
   if (!source) {
     return ''
   }
 
+  const translateOne = async (content) => {
+    const byProxy = await translateViaSiteApi(content)
+    if (byProxy) {
+      return byProxy
+    }
+
+    const byDirect = await translateToChinese(content)
+    return byDirect || ''
+  }
+
   if (source.length <= 220) {
-    const translated = await translateToChinese(source)
+    const translated = await translateOne(source)
     return translated || ''
   }
 
@@ -107,14 +132,14 @@ export async function translateEnglishTextToChinese(text) {
 
   const translatedParts = []
   for (const chunk of sentenceChunks) {
-    const translated = await translateToChinese(chunk)
+    const translated = await translateOne(chunk)
     if (translated) {
       translatedParts.push(translated)
     }
   }
 
   if (translatedParts.length === 0) {
-    const translated = await translateToChinese(source)
+    const translated = await translateOne(source)
     return translated || ''
   }
 
