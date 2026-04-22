@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import { READING_CONTENT } from './data/readingPassages'
 import { lookupWordDetails } from './utils/dictionaryLookup'
 
@@ -68,8 +68,10 @@ function App() {
   const [speechSupported, setSpeechSupported] = useState(false)
   const [speakingKey, setSpeakingKey] = useState('')
   const [notice, setNotice] = useState('')
+  const sectionRefs = useRef(new Map())
 
-  const currentSection = READING_CONTENT.sections[sectionIndex]
+  const sections = READING_CONTENT.sections
+  const currentSection = sections[sectionIndex]
 
   useEffect(() => {
     const supported =
@@ -105,6 +107,10 @@ function App() {
     }
     return currentSection.blocks.map((block) => block.en).join(' ')
   }, [currentSection])
+
+  const fullTextForReading = useMemo(() => {
+    return sections.flatMap((section) => section.blocks.map((block) => block.en)).join(' ')
+  }, [sections])
 
   const playText = (text, key) => {
     if (!speechSupported) {
@@ -197,6 +203,31 @@ function App() {
     }
   }
 
+  const handleSectionChange = (nextIndex) => {
+    const index = Number(nextIndex)
+    setSectionIndex(index)
+    setNotice('')
+
+    const targetSection = sections[index]
+    if (!targetSection) {
+      return
+    }
+
+    requestAnimationFrame(() => {
+      const targetNode = sectionRefs.current.get(targetSection.id)
+      if (targetNode) {
+        targetNode.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    })
+  }
+
+  const playWordAgain = () => {
+    if (!selectedWord) {
+      return
+    }
+    playWordInstant(selectedWord)
+  }
+
   if (!currentSection) {
     return <main className="reader-shell">暂无可用课文内容。</main>
   }
@@ -212,15 +243,9 @@ function App() {
 
       <section className="control-panel">
         <label className="field">
-          <span>选择章节</span>
-          <select
-            value={sectionIndex}
-            onChange={(event) => {
-              setSectionIndex(Number(event.target.value))
-              setNotice('')
-            }}
-          >
-            {READING_CONTENT.sections.map((section, index) => (
+          <span>选择章节（页面会自动跳转到该章节）</span>
+          <select value={sectionIndex} onChange={(event) => handleSectionChange(event.target.value)}>
+            {sections.map((section, index) => (
               <option key={section.id} value={index}>
                 {index + 1}. {section.title}
               </option>
@@ -234,7 +259,10 @@ function App() {
             type="button"
             onClick={() => playText(sectionTextForReading, `section-${currentSection.id}`)}
           >
-            朗读本节全文
+            朗读当前章节
+          </button>
+          <button className="btn primary" type="button" onClick={() => playText(fullTextForReading, 'all')}>
+            朗读全部内容
           </button>
           <button className="btn secondary" type="button" onClick={handleStopSpeaking}>
             停止朗读
@@ -245,64 +273,78 @@ function App() {
       </section>
 
       <section className="book-page">
-        <h2>{currentSection.title}</h2>
-
         <div className="page-grid">
           <article className="text-column">
-            {currentSection.blocks.map((block, index) => {
-              const tokens = tokenizeText(block.en)
-              const translatedText = block.zh || '（暂无翻译）'
+            {sections.map((section) => (
+              <section
+                key={section.id}
+                className="chapter-card"
+                ref={(node) => {
+                  if (node) {
+                    sectionRefs.current.set(section.id, node)
+                  } else {
+                    sectionRefs.current.delete(section.id)
+                  }
+                }}
+              >
+                <h2>{section.title}</h2>
 
-              return (
-                <section key={block.id} className="paragraph-card">
-                  <div className="paragraph-toolbar">
-                    <span>段落 {index + 1}</span>
-                    <button
-                      className="btn tiny"
-                      type="button"
-                      onClick={() => playText(block.en, `block-${block.id}`)}
-                    >
-                      {speakingKey === `block-${block.id}` ? '朗读中...' : '朗读本段'}
-                    </button>
-                  </div>
+                {section.blocks.map((block, index) => {
+                  const tokens = tokenizeText(block.en)
+                  const translatedText = block.zh || '（暂无翻译）'
 
-                  <p className="english-paragraph">
-                    {tokens.map((token, tokenIndex) => {
-                      if (/^[A-Za-z]+(?:[-'][A-Za-z]+)?$/.test(token)) {
-                        const normalized = normalizeWord(token)
-                        const isActive = selectedWord === normalized
-                        return (
-                          <button
-                            key={`${block.id}-${tokenIndex}`}
-                            className={`word-chip ${isActive ? 'active' : ''}`}
-                            type="button"
-                            onClick={() => handleWordClick(token)}
-                          >
-                            {token}
-                          </button>
-                        )
-                      }
+                  return (
+                    <section key={`${section.id}-${block.id}`} className="paragraph-card">
+                      <div className="paragraph-toolbar">
+                        <span>段落 {index + 1}</span>
+                        <button
+                          className="btn tiny"
+                          type="button"
+                          onClick={() => playText(block.en, `block-${section.id}-${block.id}`)}
+                        >
+                          {speakingKey === `block-${section.id}-${block.id}` ? '朗读中...' : '朗读本段'}
+                        </button>
+                      </div>
 
-                      return (
-                        <span key={`${block.id}-${tokenIndex}`} className="plain-token">
-                          {token}
-                        </span>
-                      )
-                    })}
-                  </p>
+                      <p className="english-paragraph">
+                        {tokens.map((token, tokenIndex) => {
+                          if (/^[A-Za-z]+(?:[-'][A-Za-z]+)?$/.test(token)) {
+                            const normalized = normalizeWord(token)
+                            const isActive = selectedWord === normalized
+                            return (
+                              <button
+                                key={`${section.id}-${block.id}-${tokenIndex}`}
+                                className={`word-chip ${isActive ? 'active' : ''}`}
+                                type="button"
+                                onClick={() => handleWordClick(token)}
+                              >
+                                {token}
+                              </button>
+                            )
+                          }
 
-                  <div className="translation-box">
-                    <h3>中文对照</h3>
-                    <p>{translatedText}</p>
-                  </div>
-                </section>
-              )
-            })}
+                          return (
+                            <span key={`${section.id}-${block.id}-${tokenIndex}`} className="plain-token">
+                              {token}
+                            </span>
+                          )
+                        })}
+                      </p>
+
+                      <div className="translation-box">
+                        <h3>中文对照</h3>
+                        <p>{translatedText}</p>
+                      </div>
+                    </section>
+                  )
+                })}
+              </section>
+            ))}
           </article>
 
           <aside className="word-panel">
             <h3>单词信息</h3>
-            {!selectedWord && <p>点击左侧英文单词，即可查看发音和意思。</p>}
+            {!selectedWord && <p>点击左侧英文单词，即可立即发音并查看音标和中文意思。</p>}
 
             {selectedWord && (
               <div className="word-detail">
@@ -319,6 +361,9 @@ function App() {
                       <strong>中文：</strong>
                       {selectedWordDetail?.meaning || '待补充'}
                     </p>
+                    <button className="btn tiny" type="button" onClick={playWordAgain}>
+                      再读一次单词
+                    </button>
                   </>
                 )}
               </div>

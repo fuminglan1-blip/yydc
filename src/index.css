@@ -129,13 +129,6 @@ body {
   padding: 24px 22px;
 }
 
-.book-page h2 {
-  margin: 0 0 16px;
-  font-size: 30px;
-  line-height: 1.25;
-  color: #22384f;
-}
-
 .page-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 290px;
@@ -148,6 +141,23 @@ body {
   border-radius: 12px;
   background: #fffdf8;
   padding: 16px;
+}
+
+.chapter-card {
+  scroll-margin-top: 20px;
+}
+
+.chapter-card + .chapter-card {
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 2px solid #e4dacb;
+}
+
+.chapter-card h2 {
+  margin: 0 0 16px;
+  font-size: 30px;
+  line-height: 1.25;
+  color: #22384f;
 }
 
 .paragraph-card {
