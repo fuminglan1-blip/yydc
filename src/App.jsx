@@ -77,6 +77,7 @@ function App() {
   const [speakingKey, setSpeakingKey] = useState('')
   const [notice, setNotice] = useState('')
   const [translatingBlocks, setTranslatingBlocks] = useState({})
+  const [translationFailedBlocks, setTranslationFailedBlocks] = useState({})
 
   const currentSection = READING_CONTENT.sections[sectionIndex]
 
@@ -133,15 +134,27 @@ function App() {
 
         const key = getBlockKey(currentSection.id, block.id)
         setTranslatingBlocks((prev) => ({ ...prev, [key]: true }))
+        setTranslationFailedBlocks((prev) => ({ ...prev, [key]: false }))
 
         try {
-          const translated = await translateEnglishTextToChinese(block.en)
+          let translated = ''
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            translated = await translateEnglishTextToChinese(block.en)
+            if (translated) {
+              break
+            }
+            await new Promise((resolve) => setTimeout(resolve, 450))
+          }
+
           if (!cancelled && translated) {
             setBlockTranslationCache((prev) => ({ ...prev, [key]: translated }))
+          } else if (!cancelled) {
+            setTranslationFailedBlocks((prev) => ({ ...prev, [key]: true }))
           }
         } catch {
           if (!cancelled) {
             setNotice('部分段落翻译加载失败，可稍后重试。')
+            setTranslationFailedBlocks((prev) => ({ ...prev, [key]: true }))
           }
         } finally {
           if (!cancelled) {
@@ -206,6 +219,23 @@ function App() {
     })
   }
 
+  const playWordInstant = (word) => {
+    if (!speechSupported) {
+      return
+    }
+
+    const synth = window.speechSynthesis
+    synth.cancel()
+    const utterance = new SpeechSynthesisUtterance(word)
+    utterance.lang = 'en-US'
+    utterance.rate = 0.96
+    utterance.pitch = 1
+    utterance.onend = () => setSpeakingKey('')
+    utterance.onerror = () => setSpeakingKey('')
+    setSpeakingKey(`word-${word}`)
+    synth.speak(utterance)
+  }
+
   const handleStopSpeaking = () => {
     if (!speechSupported) {
       return
@@ -216,6 +246,7 @@ function App() {
 
   const handleWordClick = async (word) => {
     const normalized = normalizeWord(word)
+    playWordInstant(normalized)
     setSelectedWord(normalized)
 
     if (wordCache[normalized]) {
@@ -257,10 +288,21 @@ function App() {
     }
 
     setTranslatingBlocks((prev) => ({ ...prev, [key]: true }))
+    setTranslationFailedBlocks((prev) => ({ ...prev, [key]: false }))
     try {
-      const translated = await translateEnglishTextToChinese(block.en)
+      let translated = ''
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        translated = await translateEnglishTextToChinese(block.en)
+        if (translated) {
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 450))
+      }
+
       if (translated) {
         setBlockTranslationCache((prev) => ({ ...prev, [key]: translated }))
+      } else {
+        setTranslationFailedBlocks((prev) => ({ ...prev, [key]: true }))
       }
     } finally {
       setTranslatingBlocks((prev) => ({ ...prev, [key]: false }))
@@ -332,6 +374,7 @@ function App() {
               const translatedText = block.zh || blockTranslationCache[blockKey] || ''
               const shouldShowTranslation = index % 2 === 0
               const isTranslating = Boolean(translatingBlocks[blockKey])
+              const translationFailed = Boolean(translationFailedBlocks[blockKey])
 
               return (
                 <section key={block.id} className="paragraph-card">
@@ -378,7 +421,13 @@ function App() {
                         <p>{translatedText}</p>
                       ) : (
                         <div className="translation-placeholder">
-                          <p>{isTranslating ? '翻译生成中...' : '该段中文正在准备中。'}</p>
+                          <p>
+                            {isTranslating
+                              ? '翻译生成中...'
+                              : translationFailed
+                                ? '翻译服务暂时不可用，请点击重试。'
+                                : '该段中文正在准备中。'}
+                          </p>
                           {!isTranslating && (
                             <button
                               className="btn tiny"

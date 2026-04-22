@@ -85,8 +85,40 @@ async function translateToChinese(text) {
 }
 
 export async function translateEnglishTextToChinese(text) {
-  const translated = await translateToChinese(text)
-  return translated || ''
+  const source = cleanMeaningText(text)
+  if (!source) {
+    return ''
+  }
+
+  if (source.length <= 220) {
+    const translated = await translateToChinese(source)
+    return translated || ''
+  }
+
+  const sentenceChunks = source
+    .split(/(?<=[.!?])\s+/)
+    .map((item) => cleanMeaningText(item))
+    .filter(Boolean)
+
+  if (sentenceChunks.length === 0) {
+    const translated = await translateToChinese(source)
+    return translated || ''
+  }
+
+  const translatedParts = []
+  for (const chunk of sentenceChunks) {
+    const translated = await translateToChinese(chunk)
+    if (translated) {
+      translatedParts.push(translated)
+    }
+  }
+
+  if (translatedParts.length === 0) {
+    const translated = await translateToChinese(source)
+    return translated || ''
+  }
+
+  return translatedParts.join(' ')
 }
 
 export async function lookupWordDetails(word) {
