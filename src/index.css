@@ -32,8 +32,8 @@ body {
 }
 
 .reader-shell {
-  width: min(1320px, calc(100vw - 352px));
-  margin: 0 20px 0 312px;
+  width: calc(100vw - 336px);
+  margin: 0 12px 0 312px;
   padding: 24px 16px 40px;
 }
 
